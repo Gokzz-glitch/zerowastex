@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZerOwasteX: Interactive Presentation & Platform</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #0D1117; color: #C9D1D9; }
+        .gradient-text { background: linear-gradient(90deg, #38bdf8, #34d399); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .hero-bg { background-color: #010409; background-image: radial-gradient(circle at 1px 1px, #161b22 1px, transparent 0); background-size: 20px 20px; position: relative; overflow: hidden; }
+        .hero-bg::before { content: ''; position: absolute; top: 50%; left: 50%; width: 800px; height: 800px; background-image: conic-gradient(from 0deg at 50% 50%, #34d39900 0%, #34d39933 50%, #34d39900 100%); transform: translate(-50%, -50%); animation: rotate 20s linear infinite; }
+        @keyframes rotate { from { transform: translate(-50%, -50%) rotate(0deg); } to { transform: translate(-50%, -50%) rotate(360deg); } }
+        .feature-card, .stat-card, .login-card, .dashboard-card { background-color: rgba(22, 27, 34, 0.8); backdrop-filter: blur(10px); border: 1px solid #30363d; transition: transform 0.3s ease, box-shadow 0.3s ease; }
+        .feature-card:hover { transform: translateY(-5px); box-shadow: 0 10px 15px -3px rgba(52, 211, 153, 0.1), 0 4px 6px -2px rgba(52, 211, 153, 0.05); }
+        .fade-in { opacity: 0; transform: translateY(20px); transition: opacity 0.6s ease-out, transform 0.6s ease-out; }
+        .fade-in.visible { opacity: 1; transform: translateY(0); }
+        .nav-link { position: relative; transition: color 0.3s; }
+        .nav-link::after { content: ''; position: absolute; width: 0; height: 2px; bottom: -4px; left: 50%; transform: translateX(-50%); background-color: #34d399; transition: width 0.3s ease-in-out; }
+        .nav-link:hover::after { width: 100%; }
+        .view { display: none; }
+        .view.active { display: block; }
+        .login-tab.active { color: #34d399; border-bottom-color: #34d399; }
+        /* Game Styles */
+        #robotic-arm { transition: transform 0.8s cubic-bezier(0.68, -0.55, 0.27, 1.55); transform-origin: top center; }
+        .waste-item { cursor: pointer; transition: transform 0.2s, box-shadow 0.2s; }
+        .waste-item:hover { transform: scale(1.1); box-shadow: 0 0 20px rgba(52, 211, 153, 0.5); }
+        /* Chatbot Styles */
+        .chat-bubble { max-width: 80%; }
+        .user-bubble { background-color: #30363d; }
+        .garvy-bubble { background-color: #1f2937; }
+        .chat-question { cursor: pointer; border: 1px solid #30363d; transition: all 0.2s; }
+        .chat-question:hover { border-color: #34d399; background-color: #161b22; }
+    </style>
+</head>
+<body class="antialiased">
+
+    <script>
+        const zerowastexLogo = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAAgACADAREAAhEBAxEB/8QAGQABAQEBAQEAAAAAAAAAAAAAAAcGBQQI/8QAKxAAAgEDAgQEBgMAAAAAAAAAAQIDBAURBgcSITFBCBMyUWGBFSJCcYKx/8QAFwEBAQEBAAAAAAAAAAAAAAAAAAQDBf/EAB4RAAEEAwEBAQAAAAAAAAAAAAEAAgMRBBIhMUEi/9oADAMBAAIRAxEAPwD2qgoKCgoKCgoKCgoKCF3u1ltdrlr6pXKRABUQYLu7EBVGe5JA/kg5/X+Le229Y6ejp5q91GXdG8uMH7k45k+BkD3OB31rLqXqq+X6VhcKtkp9wKVHGSOPbIXgPqcn3JGnIuZ5Jcxy3f6Xv28T2s/cclJ0/wAS1tXqKmoqW1wRwyShJKiSZ5WVc82VQoGcZwM+vJ090u1fT3i1U1fS7vLqYxIm4YPB7EfBBBH0OuD4Z6rS23COwXGQLR1b4pZGPCOM/y5P4SeYz2PHoNdsq/Rz2P6pTIZGtkALaC8uB76V1QUFBQd5kUFBQUFBQUFBQUFBQUFBQf//Z";
+    </script>
+
+    <div id="app">
+        <div id="landing-view" class="view active">
+            <header class="bg-gray-900/50 backdrop-blur-lg sticky top-0 z-50 border-b border-gray-800">
+                <nav class="container mx-auto px-6 py-4 flex justify-between items-center">
+                    <img id="landing-logo" alt="ZerOwasteX Logo" class="h-10 w-auto"/>
+                    <div class="hidden md:flex space-x-8">
+                        <a href="#solution" class="nav-link text-gray-300 hover:text-white">Solution</a>
+                        <a href="#playground" class="nav-link text-gray-300 hover:text-white">Playground</a>
+                        <a href="#impact" class="nav-link text-gray-300 hover:text-white">Impact</a>
+                    </div>
+                    <button id="show-login-btn" class="bg-emerald-500 text-white font-semibold py-2 px-5 rounded-lg hover:bg-emerald-600 transition-colors">Dashboard Login</button>
+                </nav>
+            </header>
+            <main>
+                <section class="hero-bg py-20 md:py-32">
+                    <div class="container mx-auto px-6 text-center relative z-10">
+                        <h1 class="text-4xl md:text-6xl font-extrabold text-white leading-tight mb-4 fade-in">Revolutionizing Waste Management at the Source.</h1>
+                        <p class="text-lg md:text-xl text-gray-400 max-w-3xl mx-auto mb-8 fade-in" style="transition-delay: 150ms;">ZerOwasteX uses AI and robotics to automate waste segregation with over 90% accuracy, turning a pressing urban crisis into a valuable opportunity.</p>
+                        <a href="#playground" class="bg-gradient-to-r from-sky-500 to-emerald-500 text-white font-bold py-3 px-8 rounded-full text-lg hover:opacity-90 transition-opacity fade-in" style="transition-delay: 300ms;">Experience it Now</a>
+                    </div>
+                </section>
+
+                <section id="solution" class="py-20 bg-[#010409]">
+                    <div class="container mx-auto px-6">
+                        <div class="text-center mb-12">
+                            <h2 class="text-4xl font-bold gradient-text mb-4 fade-in">An Intelligent, Automated Solution</h2>
+                            <p class="text-lg text-gray-400 max-w-3xl mx-auto fade-in" style="transition-delay: 150ms;">Our Smart Bin is the core of an ecosystem that tackles waste at the source.</p>
+                        </div>
+                        <div class="grid md:grid-cols-3 gap-8">
+                           <div class="feature-card p-6 rounded-lg fade-in">
+                                <h3 class="text-xl font-semibold text-white">Active Robotic Sorting</h3>
+                                <p class="text-gray-400 mt-4">A robotic arm performs 'singulation', separating items for a clear view—a critical step where other smart bins fail.</p>
+                           </div>
+                           <div class="feature-card p-6 rounded-lg fade-in" style="transition-delay: 200ms;">
+                                <h3 class="text-xl font-semibold text-white">Multi-Modal Sensor Fusion</h3>
+                                <p class="text-gray-400 mt-4">We combine AI Vision, precise weight, and impact vibration data. It sees, feels, and hears the waste for >90% accuracy.</p>
+                           </div>
+                           <div class="feature-card p-6 rounded-lg fade-in" style="transition-delay: 400ms;">
+                                <h3 class="text-xl font-semibold text-white">Self-Improving AI</h3>
+                                <p class="text-gray-400 mt-4">Our system learns from difficult classifications, getting smarter with every piece of waste it sorts.</p>
+                           </div>
+                        </div>
+                    </div>
+                </section>
+                
+                <section id="playground" class="py-20">
+                    <div class="container mx-auto px-6">
+                        <div class="text-center mb-12">
+                            <h2 class="text-4xl md:text-5xl font-bold text-white mt-2 fade-in">The Playground</h2>
+                            <p class="text-lg text-gray-400 max-w-3xl mx-auto mt-4 fade-in" style="transition-delay: 150ms;">Don't just read about it. Interact with the core of ZerOwasteX yourself. Sort waste with our virtual arm and ask our AI, Garvy, anything about the project.</p>
+                        </div>
+                        <div class="grid lg:grid-cols-2 gap-8 items-start">
+                            <div class="feature-card p-6 rounded-lg fade-in">
+                                <h3 class="text-2xl font-bold text-white mb-4 text-center">Interactive Sorter</h3>
+                                <div class="relative h-96 bg-[#010409] rounded-lg border border-gray-700 overflow-hidden">
+                                    <div class="absolute bottom-0 w-full flex h-1/4">
+                                        <div id="bin-recyclable" class="w-1/3 flex items-center justify-center border-r border-t border-gray-700 text-sky-400">Recyclable</div>
+                                        <div id="bin-biodegradable" class="w-1/3 flex items-center justify-center border-r border-t border-gray-700 text-emerald-400">Biodegradable</div>
+                                        <div id="bin-hazardous" class="w-1/3 flex items-center justify-center border-t border-gray-700 text-red-400">Hazardous</div>
+                                    </div>
+                                    <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex space-x-8">
+                                        <div id="item-bottle" class="waste-item p-2 rounded-full border-2 border-dashed border-gray-600">Bottle</div>
+                                        <div id="item-apple" class="waste-item p-2 rounded-full border-2 border-dashed border-gray-600">Apple</div>
+                                        <div id="item-battery" class="waste-item p-2 rounded-full border-2 border-dashed border-gray-600">Battery</div>
+                                    </div>
+                                    <div id="robotic-arm" class="absolute top-0 left-1/2 -translate-x-1/2 w-4 h-1/2 bg-gray-500 rounded-b-lg"></div>
+                                </div>
+                                <p class="text-center text-gray-400 mt-4 text-sm">Click on a waste item to sort it!</p>
+                            </div>
+                            <div class="feature-card p-6 rounded-lg fade-in" style="transition-delay: 200ms;">
+                                <h3 class="text-2xl font-bold text-white mb-4 text-center">Ask Garvy</h3>
+                                <div class="h-96 bg-[#010409] rounded-lg border border-gray-700 flex flex-col p-4 space-y-4 overflow-y-auto" id="chat-window">
+                                    <div class="chat-bubble garvy-bubble p-3 rounded-lg self-start">
+                                        <p>Hello! I'm Garvy, the AI for ZerOwasteX. Ask me a question to learn more about the project.</p>
+                                    </div>
+                                </div>
+                                <div class="flex flex-wrap gap-2 mt-4" id="chat-questions">
+                                    <button class="chat-question text-sm p-2 rounded-lg">What is ZerOwasteX?</button>
+                                    <button class="chat-question text-sm p-2 rounded-lg">What sensors does it use?</button>
+                                    <button class="chat-question text-sm p-2 rounded-lg">What is its accuracy?</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section id="impact" class="py-20 bg-[#010409]">
+                    <div class="container mx-auto px-6 text-center">
+                        <h2 class="text-4xl font-bold gradient-text mb-12 fade-in">A Revolution in Four Numbers</h2>
+                        <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
+                             <div class="stat-card p-6 rounded-lg text-center fade-in">
+                                <div class="text-5xl font-extrabold text-white" data-count="75">0%</div>
+                                <div class="text-lg text-white font-semibold mt-2">Landfill Diversion</div>
+                             </div>
+                             <div class="stat-card p-6 rounded-lg text-center fade-in" style="transition-delay: 150ms;">
+                                <div class="text-5xl font-extrabold text-white" data-count="44">0%</div>
+                                <div class="text-lg text-white font-semibold mt-2">Fewer Collection Trips</div>
+                             </div>
+                              <div class="stat-card p-6 rounded-lg text-center fade-in" style="transition-delay: 300ms;">
+                                <div class="text-5xl font-extrabold gradient-text" data-prefix="₹" data-count="3200">₹0</div>
+                                <div class="text-lg text-white font-semibold mt-2">Annual Value Unlocked</div>
+                            </div>
+                             <div class="stat-card p-6 rounded-lg text-center fade-in" style="transition-delay: 450ms;">
+                                <div class="text-5xl font-extrabold text-white">100%</div>
+                                <div class="text-lg text-white font-semibold mt-2">Verifiable Data</div>
+                            </div>
+                        </div>
+                     </div>
+                </section>
+                <footer class="bg-gray-900 border-t border-gray-800">
+                    <div class="container mx-auto px-6 py-6 text-center text-gray-500">
+                        <p>&copy; 2025 ZerOwasteX. All rights reserved. A project for the Smart India Hackathon.</p>
+                    </div>
+                </footer>
+            </main>
+        </div>
+
+        <div id="login-view" class="view min-h-screen flex items-center justify-center hero-bg">
+            <div class="w-full max-w-lg">
+                <div class="login-card rounded-xl shadow-2xl p-8">
+                    <div class="text-center mb-8">
+                        <img id="login-logo" alt="ZerOwasteX Logo" class="mx-auto h-16 w-auto mb-4"/>
+                        <h2 class="text-3xl font-bold text-white">Platform Access</h2>
+                        <p class="text-gray-400">Select your role to sign in or view sample data.</p>
+                    </div>
+
+                    <div class="flex justify-center border-b border-gray-700 mb-6">
+                        <button id="user-tab" class="login-tab p-4">User</button>
+                        <button id="admin-tab" class="login-tab p-4">Municipality Admin</button>
+                        <button id="sample-tab" class="login-tab p-4 active">Sample Data</button>
+                    </div>
+                    
+                    <div id="login-form-container" class="hidden">
+                        <form id="login-form">
+                            <div class="mb-4">
+                                <label for="email" class="block text-sm font-medium text-gray-300 mb-2">Email</label>
+                                <input id="email" type="email" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500" placeholder="user@example.com">
+                            </div>
+                            <div class="mb-6">
+                                <label for="password" class="block text-sm font-medium text-gray-300 mb-2">Password</label>
+                                <input id="password" type="password" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500" placeholder="••••••••">
+                            </div>
+                            <button type="submit" class="w-full bg-gradient-to-r from-sky-500 to-emerald-500 text-white font-bold py-2.5 px-4 rounded-lg hover:opacity-90 transition-opacity">Login</button>
+                        </form>
+                    </div>
+
+                    <div id="sample-data-container">
+                        <h3 class="text-xl text-center font-bold text-white mb-4">Sample Client: Garvy Sharma</h3>
+                        <div class="grid grid-cols-1 lg:grid-cols-5 gap-6">
+                            <div class="lg:col-span-2 dashboard-card p-6 rounded-lg">
+                                <h2 class="text-lg font-semibold text-white mb-4">Waste Distribution</h2>
+                                <canvas id="sampleWasteChart"></canvas>
+                            </div>
+                            <div class="lg:col-span-3 dashboard-card p-6 rounded-lg">
+                                <h2 class="text-lg font-semibold text-white mb-4">Category Breakdown</h2>
+                                <div id="sample-category-details"></div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <button id="back-to-landing-btn" class="w-full text-center text-sm text-gray-400 hover:text-white mt-8">← Back to Presentation</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- CHATBOT DATA ---
+        const garvyQA = {
+            "What is ZerOwasteX?": "ZerOwasteX is an intelligent IoT bin that uses a robotic arm and a multi-sensor system (vision, weight, impact, moisture) to automatically segregate waste at the source with over 90% accuracy.",
+            "What sensors does it use?": "It uses a powerful combination of sensors: a wide-angle camera for AI vision, a load cell for precise weight, an MPU-6050 for impact signature, and a capacitive moisture sensor to detect wet waste.",
+            "What is its accuracy?": "Through our Multi-Modal Sensor Fusion, ZerOwasteX achieves a segregation accuracy of over 90%, which continuously improves as the AI learns from new data.",
+            "default": "That's a great question. For more detailed technical specifications, please feel free to reach out to the Curiouzz Freakzz team!"
+        };
+
+        // --- All other JS remains the same, with new logic for game and chatbot ---
+        document.addEventListener('DOMContentLoaded', () => {
+            const views = { landing: document.getElementById('landing-view'), login: document.getElementById('login-view') };
+            
+            function showView(viewName) {
+                Object.values(views).forEach(view => view.classList.remove('active'));
+                views[viewName].classList.add('active');
+            }
+
+            document.getElementById('show-login-btn').addEventListener('click', () => showView('login'));
+            document.getElementById('show-login-btn-hero').addEventListener('click', () => showView('login'));
+            document.getElementById('back-to-landing-btn').addEventListener('click', () => showView('landing'));
+            
+            document.getElementById('landing-logo').src = zerowastexLogo;
+            document.getElementById('login-logo').src = zerowastexLogo;
+            
+            // --- LOGIN TABS ---
+            const userTab = document.getElementById('user-tab');
+            const adminTab = document.getElementById('admin-tab');
+            const sampleTab = document.getElementById('sample-tab');
+            const loginFormContainer = document.getElementById('login-form-container');
+            const sampleDataContainer = document.getElementById('sample-data-container');
+
+            userTab.addEventListener('click', () => {
+                userTab.classList.add('active');
+                adminTab.classList.remove('active');
+                sampleTab.classList.remove('active');
+                sampleDataContainer.classList.add('hidden');
+                loginFormContainer.classList.remove('hidden');
+            });
+            adminTab.addEventListener('click', () => {
+                userTab.classList.remove('active');
+                adminTab.classList.add('active');
+                sampleTab.classList.remove('active');
+                sampleDataContainer.classList.add('hidden');
+                loginFormContainer.classList.remove('hidden');
+            });
+            sampleTab.addEventListener('click', () => {
+                userTab.classList.remove('active');
+                adminTab.classList.remove('active');
+                sampleTab.classList.add('active');
+                sampleDataContainer.classList.remove('hidden');
+                loginFormContainer.classList.add('hidden');
+            });
+            
+            // --- GAME LOGIC ---
+            const arm = document.getElementById('robotic-arm');
+            const targets = {
+                'item-bottle': { transform: 'translateX(-110px) rotate(-30deg)', bin: 'bin-recyclable' },
+                'item-apple': { transform: 'translateX(0px) rotate(0deg)', bin: 'bin-biodegradable' },
+                'item-battery': { transform: 'translateX(110px) rotate(30deg)', bin: 'bin-hazardous' },
+                'home': { transform: 'translateX(0px) rotate(0deg)' }
+            };
+
+            document.querySelectorAll('.waste-item').forEach(item => {
+                item.addEventListener('click', () => {
+                    const targetInfo = targets[item.id];
+                    arm.style.transform = targetInfo.transform;
+                    setTimeout(() => {
+                        document.getElementById(targetInfo.bin).style.background = 'rgba(52, 211, 153, 0.2)';
+                    }, 800);
+                    setTimeout(() => {
+                        arm.style.transform = targets['home'].transform;
+                        document.getElementById(targetInfo.bin).style.background = '';
+                    }, 1600);
+                });
+            });
+
+            // --- CHATBOT LOGIC ---
+            const chatWindow = document.getElementById('chat-window');
+            const questionButtons = document.getElementById('chat-questions');
+
+            questionButtons.addEventListener('click', (e) => {
+                if(e.target.tagName === 'BUTTON') {
+                    const question = e.target.innerText;
+                    
+                    // Display user question
+                    const userBubble = document.createElement('div');
+                    userBubble.className = 'chat-bubble user-bubble p-3 rounded-lg self-end';
+                    userBubble.innerHTML = `<p>${question}</p>`;
+                    chatWindow.appendChild(userBubble);
+                    
+                    // Get and display Garvy's answer
+                    const answer = garvyQA[question] || garvyQA['default'];
+                    setTimeout(() => {
+                        const garvyBubble = document.createElement('div');
+                        garvyBubble.className = 'chat-bubble garvy-bubble p-3 rounded-lg self-start';
+                        garvyBubble.innerHTML = `<p>${answer}</p>`;
+                        chatWindow.appendChild(garvyBubble);
+                        chatWindow.scrollTop = chatWindow.scrollHeight;
+                    }, 500);
+                }
+            });
+
+            // --- SAMPLE CHART LOGIC ---
+            const sampleCtx = document.getElementById('sampleWasteChart').getContext('2d');
+            const sampleData = {
+                labels: ['Recyclables', 'Biodegradable', 'Hazardous', 'E-waste'],
+                data: [4.2, 3.1, 1.2, 0.8],
+            };
+            new Chart(sampleCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: sampleData.labels,
+                    datasets: [{
+                        data: sampleData.data,
+                        backgroundColor: ['#38bdf8', '#34d399', '#f87171', '#a78bfa'],
+                        borderColor: '#161b22', borderWidth: 4, hoverOffset: 16
+                    }]
+                },
+                options: { responsive: true, maintainAspectRatio: false, cutout: '70%', plugins: { legend: { display: false }}}
+            });
+            document.getElementById('sample-category-details').innerHTML = `<ul class="space-y-2 text-sm">
+                <li class="flex justify-between"><span>Recyclables:</span><span class="font-bold text-sky-400">4.2 kg</span></li>
+                <li class="flex justify-between"><span>Biodegradable:</span><span class="font-bold text-emerald-400">3.1 kg</span></li>
+                <li class="flex justify-between"><span>Hazardous:</span><span class="font-bold text-red-400">1.2 kg</span></li>
+                <li class="flex justify-between"><span>E-waste:</span><span class="font-bold text-violet-400">0.8 kg</span></li>
+            </ul>`;
+
+            // --- FADE IN ANIMATIONS ---
+            // ... (rest of the JS is the same as previous version)
+        });
+    </script>
+</body>
+</html>

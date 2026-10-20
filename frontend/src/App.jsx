@@ -4,6 +4,7 @@ import LiveMap from './pages/LiveMap'
 import Leaderboard from './pages/Leaderboard'
 import Community from './pages/Community'
 import Admin from './pages/Admin'
+import MrfDashboard from './pages/MrfDashboard'
 
 export default function App() {
   return (
@@ -11,10 +12,11 @@ export default function App() {
       <Navbar />
       <main className="main-content">
         <Routes>
-          <Route path="/"            element={<LiveMap />} />
+          <Route path="/" element={<MrfDashboard />} />
+          <Route path="/live-map" element={<LiveMap />} />
           <Route path="/leaderboard" element={<Leaderboard />} />
-          <Route path="/community"   element={<Community />} />
-          <Route path="/admin"       element={<Admin />} />
+          <Route path="/community" element={<Community />} />
+          <Route path="/admin" element={<Admin />} />
         </Routes>
       </main>
     </div>

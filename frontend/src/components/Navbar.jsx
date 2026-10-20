@@ -1,10 +1,11 @@
 import { NavLink } from 'react-router-dom'
 
 const links = [
-  { to: '/',            icon: '🗺️',  label: 'Live Map'     },
-  { to: '/leaderboard', icon: '🏆',  label: 'Leaderboard'  },
-  { to: '/community',   icon: '🏘️',  label: 'Community'    },
-  { to: '/admin',       icon: '⚙️',  label: 'Admin'        },
+  { to: '/', icon: '♻️', label: 'MRF Dashboard' },
+  { to: '/live-map', icon: '🗺️', label: 'Live Map' },
+  { to: '/leaderboard', icon: '🏆', label: 'Leaderboard' },
+  { to: '/community', icon: '🏘️', label: 'Community' },
+  { to: '/admin', icon: '⚙️', label: 'Admin' },
 ]
 
 export default function Navbar() {
@@ -27,8 +28,8 @@ export default function Navbar() {
       ))}
 
       <div className="navbar-footer">
-        <div>Zer0wasteX v1.0</div>
-        <div style={{ marginTop: 4, color: 'var(--accent-green)', fontSize: 11 }}>● Live</div>
+        <div>Zer0wasteX v1.1</div>
+        <div style={{ marginTop: 4, color: 'var(--accent-green)', fontSize: 11 }}>● SIH26259 Demo Ready</div>
       </div>
     </nav>
   )

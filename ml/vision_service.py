@@ -1,42 +1,9 @@
 """
-Zer0wasteX — Production Vision Service (v2)
-============================================
-Multi-stage inference pipeline targeting 90% accuracy in Indian real-world conditions.
-
-INFERENCE STRATEGY (3-layer cascade):
-
-  Layer 1 — Roboflow Hosted API (ROBOFLOW_API_KEY set)
-    → Pre-trained waste models from Roboflow Universe
-    → Immediate high accuracy without local training
-    → ~85-92% on general waste, works instantly
-
-  Layer 2 — Local Fine-tuned YOLOv8m (ml/weights/best.pt exists)
-    → Your custom-trained Indian waste model
-    → Best accuracy for Indian-specific waste types
-    → Use after running: python train.py
-
-  Layer 3 — YOLOv8m Fallback (no keys, no custom model)
-    → Generic COCO pretrained with improved heuristics
-    → ~55-65% baseline (acceptable for demos)
-
-Usage:
-    uvicorn vision_service:app --host 0.0.0.0 --port 8000 --reload
-
-POST /score
-    Form-data: file=<image>
-    Response: {
-        ai_quality_score: 0-100,
-        waste_class: "organic"|"plastic"|"paper"|"metal"|"glass"|"hazardous",
-        waste_class_label: {...},
-        classes_detected: [...],
-        confidence: 0.0-1.0,
-        inference_layer: "roboflow"|"custom"|"fallback",
-        inference_ms: float,
-        is_correctly_sorted: bool | null
-    }
-
-GET /health   → service status + active inference layer
-GET /classes  → list of 6 waste classes with metadata
+Zer0wasteX Vision Service
+Preserves /health, /classes and /score while supporting:
+- optional hosted inference adapter
+- local model fallback
+- deterministic mock fallback for demo/testing
 """
 
 import io
@@ -46,263 +13,286 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+import requests
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from PIL import Image
 
-from waste_classes import WASTE_CLASSES, CLASS_LABELS, CLASS_DIFFICULTY
+from waste_classes import (
+    WASTE_CLASSES,
+    CLASS_LABELS,
+    CLASS_DIFFICULTY,
+    SEGREGATION_RULES,
+    MLP_TAXONOMY,
+    MLP_KEYWORD_HEURISTICS,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("zer0wastex.vision")
 
-# ── Paths ─────────────────────────────────────────────────────────────────────
-WEIGHTS_DIR   = Path(__file__).parent / "weights"
-CUSTOM_WEIGHTS = WEIGHTS_DIR / "best.pt"      # your fine-tuned model
-FALLBACK_WEIGHTS = WEIGHTS_DIR / "yolov8m.pt"  # generic fallback (yolov8m > n)
+WEIGHTS_DIR = Path(__file__).parent / "weights"
+CUSTOM_WEIGHTS = WEIGHTS_DIR / "best.pt"
+FALLBACK_WEIGHTS = WEIGHTS_DIR / "yolov8m.pt"
 
-# Roboflow model IDs to try in order (best waste models on Universe)
-ROBOFLOW_MODEL_IDS = [
-    "waste-classification-ycyak/1",       # 88% mAP, 6 classes
-    "garbage-classification-3/2",         # 85% mAP
-    "trash-detection-uyugq/1",            # outdoor litter
-]
+MODEL_SOURCE = os.environ.get("VISION_MODEL_SOURCE", "auto").lower()  # auto|hosted|local|mock
+VISION_SKIP_MODEL_INIT = os.environ.get("VISION_SKIP_MODEL_INIT", "false").lower() == "true"
+HOSTED_INFERENCE_URL = os.environ.get("HOSTED_INFERENCE_URL")
+HOSTED_INFERENCE_TOKEN = os.environ.get("HOSTED_INFERENCE_TOKEN")
 
-# ── Active inference layer ────────────────────────────────────────────────────
-_inference_layer = "fallback"
-_roboflow_client = None
+_inference_layer = "mock"
+_hosted_enabled = False
 _yolo_model = None
 
 
-def _init_roboflow():
-    global _roboflow_client, _inference_layer
-    api_key = os.environ.get("ROBOFLOW_API_KEY")
-    if not api_key:
+def _init_hosted_inference() -> bool:
+    global _hosted_enabled, _inference_layer
+    if not HOSTED_INFERENCE_URL:
         return False
-    try:
-        from inference_sdk import InferenceHTTPClient
-        _roboflow_client = InferenceHTTPClient(
-            api_url="https://detect.roboflow.com",
-            api_key=api_key,
-        )
-        _inference_layer = "roboflow"
-        logger.info("✅ Roboflow inference client initialized")
-        return True
-    except ImportError:
-        logger.warning("inference-sdk not installed. Run: pip install inference-sdk")
-        return False
-    except Exception as e:
-        logger.warning(f"Roboflow init failed: {e}")
-        return False
+    _hosted_enabled = True
+    _inference_layer = "hosted"
+    logger.info("Hosted inference adapter enabled: %s", HOSTED_INFERENCE_URL)
+    return True
 
 
-def _init_local_yolo():
+def _init_local_yolo() -> bool:
     global _yolo_model, _inference_layer
+    if VISION_SKIP_MODEL_INIT:
+        logger.info("VISION_SKIP_MODEL_INIT=true, skipping local model bootstrap")
+        return False
+
     try:
         from ultralytics import YOLO
 
-        if CUSTOM_WEIGHTS.exists():
-            _yolo_model = YOLO(str(CUSTOM_WEIGHTS))
-            _inference_layer = "custom"
-            logger.info(f"✅ Custom fine-tuned model loaded: {CUSTOM_WEIGHTS}")
-        else:
-            # Download yolov8m (much better than nano for 6-class classification)
-            weights = str(FALLBACK_WEIGHTS) if FALLBACK_WEIGHTS.exists() else "yolov8m.pt"
-            _yolo_model = YOLO(weights)
-            logger.info(f"✅ YOLOv8m fallback model loaded (no custom weights found)")
+        WEIGHTS_DIR.mkdir(exist_ok=True)
+        weights = str(CUSTOM_WEIGHTS) if CUSTOM_WEIGHTS.exists() else (str(FALLBACK_WEIGHTS) if FALLBACK_WEIGHTS.exists() else "yolov8m.pt")
+        _yolo_model = YOLO(weights)
+        _inference_layer = "custom" if CUSTOM_WEIGHTS.exists() else "local-fallback"
+        logger.info("Local YOLO model active with weights: %s", weights)
         return True
-    except Exception as e:
-        logger.error(f"YOLO init failed: {e}")
+    except Exception as exc:
+        logger.warning("Local YOLO init failed: %s", exc)
         return False
 
 
-# ── Model Initialisation ──────────────────────────────────────────────────────
-WEIGHTS_DIR.mkdir(exist_ok=True)
+def _bootstrap_model() -> None:
+    global _inference_layer
+    if MODEL_SOURCE == "hosted":
+        if not _init_hosted_inference():
+            _inference_layer = "mock"
+    elif MODEL_SOURCE == "local":
+        if not _init_local_yolo():
+            _inference_layer = "mock"
+    elif MODEL_SOURCE == "mock":
+        _inference_layer = "mock"
+    else:
+        # auto: hosted -> local -> deterministic mock
+        if _init_hosted_inference():
+            return
+        if _init_local_yolo():
+            return
+        _inference_layer = "mock"
 
-if not _init_roboflow():
-    _init_local_yolo()
 
-logger.info(f"🔍 Active inference layer: {_inference_layer.upper()}")
+_bootstrap_model()
 
-
-# ── Roboflow class name → our taxonomy ───────────────────────────────────────
-ROBOFLOW_CLASS_MAP = {
-    # Common Roboflow waste model class names
-    "organic":       "organic",
-    "food":          "organic",
-    "food-waste":    "organic",
-    "vegetable":     "organic",
-    "fruit":         "organic",
-    "leaf":          "organic",
-    "paper":         "paper",
-    "cardboard":     "paper",
-    "newspaper":     "paper",
-    "plastic":       "plastic",
-    "bottle":        "plastic",
-    "sachet":        "plastic",
-    "polybag":       "plastic",
-    "metal":         "metal",
-    "can":           "metal",
-    "tin":           "metal",
-    "foil":          "metal",
-    "glass":         "glass",
-    "e-waste":       "hazardous",
-    "battery":       "hazardous",
-    "medical":       "hazardous",
-    "chemical":      "hazardous",
-    "hazardous":     "hazardous",
-    "garbage":       "organic",   # generic garbage → organic (conservative)
-    "trash":         "organic",
-    "waste":         "organic",
-}
-
-# COCO class → waste taxonomy (for YOLOv8 fallback)
 COCO_CLASS_MAP = {
-    "banana":       ("organic",   0.85),
-    "apple":        ("organic",   0.85),
-    "orange":       ("organic",   0.85),
-    "broccoli":     ("organic",   0.85),
-    "carrot":       ("organic",   0.85),
-    "hot dog":      ("organic",   0.80),
-    "pizza":        ("organic",   0.80),
-    "donut":        ("organic",   0.80),
-    "cake":         ("organic",   0.80),
-    "sandwich":     ("organic",   0.80),
-    "bottle":       ("plastic",   0.90),
-    "wine glass":   ("glass",     0.90),
-    "cup":          ("plastic",   0.75),
-    "fork":         ("metal",     0.80),
-    "knife":        ("metal",     0.80),
-    "spoon":        ("metal",     0.80),
-    "bowl":         ("plastic",   0.70),
-    "toothbrush":   ("plastic",   0.70),
-    "book":         ("paper",     0.85),
-    "scissors":     ("metal",     0.80),
-    "cell phone":   ("hazardous", 0.92),
-    "laptop":       ("hazardous", 0.92),
-    "keyboard":     ("hazardous", 0.90),
-    "remote":       ("hazardous", 0.85),
-    "mouse":        ("hazardous", 0.85),
-    "vase":         ("glass",     0.80),
-    "clock":        ("hazardous", 0.75),
-    "suitcase":     ("paper",     0.55),
-    "backpack":     ("plastic",   0.55),
-    "handbag":      ("plastic",   0.60),
-    "umbrella":     ("plastic",   0.65),
+    "bottle": ("plastic", 0.90),
+    "cup": ("plastic", 0.75),
+    "toothbrush": ("plastic", 0.70),
+    "book": ("paper", 0.85),
+    "banana": ("organic", 0.85),
+    "apple": ("organic", 0.85),
+    "cell phone": ("hazardous", 0.92),
+    "laptop": ("hazardous", 0.92),
+    "wine glass": ("glass", 0.90),
+    "fork": ("metal", 0.80),
+    "knife": ("metal", 0.80),
 }
 
 
 def _score_from_waste_class(primary_class: str, confidence: float) -> int:
-    """
-    Compute 0-100 quality score based on detected waste class + confidence.
-    Higher confidence in correct segregation = higher score.
-    """
     if primary_class == "hazardous":
-        # Hazardous in a normal bin is a major violation
         return max(0, int(20 * confidence))
 
-    base = int(confidence * 85)            # max 85 from confidence
-    bonus = 15 if confidence > 0.75 else 0 # high-conf bonus
+    base = int(confidence * 85)
+    bonus = 15 if confidence > 0.75 else 0
     return min(100, base + bonus)
 
 
-def _infer_roboflow(image: Image.Image) -> dict:
-    """Run inference via Roboflow hosted API."""
+def _infer_hosted(image: Image.Image) -> Optional[dict]:
+    if not _hosted_enabled:
+        return None
+
     buf = io.BytesIO()
     image.save(buf, format="JPEG", quality=90)
     buf.seek(0)
 
-    for model_id in ROBOFLOW_MODEL_IDS:
-        try:
-            result = _roboflow_client.infer(buf, model_id=model_id)
-            preds = result.get("predictions", [])
-            if not preds:
-                continue
+    headers = {}
+    if HOSTED_INFERENCE_TOKEN:
+        headers["Authorization"] = f"******"
 
-            # Take highest-confidence prediction
-            best = max(preds, key=lambda p: p.get("confidence", 0))
-            raw_class = best.get("class", "").lower().replace(" ", "-")
-            confidence = float(best.get("confidence", 0.5))
+    try:
+        response = requests.post(
+            HOSTED_INFERENCE_URL,
+            files={"file": ("frame.jpg", buf.getvalue(), "image/jpeg")},
+            timeout=8,
+            headers=headers,
+        )
+        response.raise_for_status()
+        payload = response.json()
 
-            waste_class = ROBOFLOW_CLASS_MAP.get(raw_class, "organic")
-            all_classes = [ROBOFLOW_CLASS_MAP.get(p.get("class", "").lower(), "organic") for p in preds]
+        waste_class = payload.get("waste_class", "plastic")
+        confidence = float(payload.get("confidence", 0.6))
+        raw_predictions = payload.get("raw_predictions", [])
 
-            return {
-                "waste_class": waste_class,
-                "confidence": round(confidence, 3),
-                "classes_detected": list(set(all_classes)),
-                "raw_predictions": [
-                    {"class": p.get("class"), "confidence": round(float(p.get("confidence", 0)), 3)}
-                    for p in preds[:5]
-                ],
-                "model_id": model_id,
-            }
-        except Exception as e:
-            logger.warning(f"Roboflow model {model_id} failed: {e}")
-            continue
-
-    # All Roboflow models failed — fall back to local YOLO
-    logger.warning("All Roboflow models failed, falling back to local YOLO")
-    return _infer_yolo(image, layer_override="roboflow_fallback")
+        return {
+            "waste_class": waste_class if waste_class in CLASS_LABELS else "plastic",
+            "confidence": max(0.0, min(1.0, confidence)),
+            "classes_detected": [waste_class],
+            "raw_predictions": raw_predictions,
+            "model_source": "hosted",
+        }
+    except Exception as exc:
+        logger.warning("Hosted inference failed, falling back locally: %s", exc)
+        return None
 
 
-def _infer_yolo(image: Image.Image, layer_override: Optional[str] = None) -> dict:
-    """Run inference via local YOLOv8 model."""
+def _infer_local_yolo(image: Image.Image) -> Optional[dict]:
     if _yolo_model is None:
-        return {"waste_class": "organic", "confidence": 0.40, "classes_detected": [], "raw_predictions": []}
+        return None
 
     results = _yolo_model.predict(source=image, conf=0.25, verbose=False)
-
     detections = []
-    for r in results:
-        for box in r.boxes:
+
+    for result in results:
+        for box in result.boxes:
             cls_name = _yolo_model.names[int(box.cls)].lower()
-            conf = float(box.conf)
-            detections.append((cls_name, conf))
+            detections.append((cls_name, float(box.conf)))
 
     if not detections:
         return {
-            "waste_class": "organic",
-            "confidence": 0.40,
+            "waste_class": "plastic",
+            "confidence": 0.45,
             "classes_detected": [],
             "raw_predictions": [],
+            "model_source": _inference_layer,
         }
 
-    # Map COCO classes to waste taxonomy
-    waste_votes = {}  # waste_class → max_confidence
+    waste_votes = {}
     for cls_name, conf in detections:
         if cls_name in COCO_CLASS_MAP:
             waste_class, reliability = COCO_CLASS_MAP[cls_name]
-            weighted_conf = conf * reliability
-            if waste_class not in waste_votes or waste_votes[waste_class] < weighted_conf:
-                waste_votes[waste_class] = weighted_conf
+            weighted = conf * reliability
+            if weighted > waste_votes.get(waste_class, 0):
+                waste_votes[waste_class] = weighted
 
     if not waste_votes:
-        primary = "organic"
-        confidence = 0.45
+        waste_class = "plastic"
+        confidence = 0.5
     else:
-        primary = max(waste_votes, key=waste_votes.get)
-        confidence = round(min(1.0, waste_votes[primary]), 3)
+        waste_class = max(waste_votes, key=waste_votes.get)
+        confidence = round(min(1.0, waste_votes[waste_class]), 3)
 
     return {
-        "waste_class": primary,
+        "waste_class": waste_class,
         "confidence": confidence,
-        "classes_detected": list({w for w, _ in [COCO_CLASS_MAP.get(c, ("organic", 0)) for c, _ in detections]}),
+        "classes_detected": list(waste_votes.keys()),
         "raw_predictions": [{"class": c, "confidence": round(f, 3)} for c, f in sorted(detections, key=lambda x: -x[1])[:5]],
+        "model_source": _inference_layer,
     }
 
 
-# ── FastAPI App ───────────────────────────────────────────────────────────────
+def _infer_mock(image: Image.Image) -> dict:
+    # Deterministic fallback based on average brightness and dimensions.
+    pixels = image.convert("L")
+    mean = sum(pixels.getdata()) / max(len(pixels.getdata()), 1)
+    width, height = image.size
+
+    if mean < 70:
+        waste_class = "hazardous"
+        confidence = 0.62
+        mlp_key = "mlp_contaminated"
+    elif width > height:
+        waste_class = "plastic"
+        confidence = 0.71
+        mlp_key = "mlp_wrapper"
+    elif mean > 170:
+        waste_class = "paper"
+        confidence = 0.69
+        mlp_key = "plastic_general"
+    else:
+        waste_class = "plastic"
+        confidence = 0.74
+        mlp_key = "mlp_laminated_pouch"
+
+    return {
+        "waste_class": waste_class,
+        "confidence": confidence,
+        "classes_detected": [waste_class],
+        "raw_predictions": [{"class": waste_class, "confidence": confidence}],
+        "model_source": "mock",
+        "mlp_key": mlp_key,
+    }
+
+
+def _resolve_mlp_category(result: dict) -> dict:
+    mlp_key = result.get("mlp_key")
+
+    if not mlp_key:
+        for pred in result.get("raw_predictions", []):
+            cls_name = str(pred.get("class", "")).lower()
+            for keyword, key in MLP_KEYWORD_HEURISTICS.items():
+                if keyword in cls_name:
+                    mlp_key = key
+                    break
+            if mlp_key:
+                break
+
+    if not mlp_key:
+        mlp_key = "plastic_general" if result.get("waste_class") == "plastic" else None
+
+    if not mlp_key:
+        return {
+            "category": None,
+            "label": None,
+            "is_mlp_candidate": False,
+            "is_heuristic": False,
+        }
+
+    info = MLP_TAXONOMY.get(mlp_key, MLP_TAXONOMY["plastic_general"])
+    return {
+        "category": mlp_key,
+        "label": info["label"],
+        "is_mlp_candidate": info["is_mlp_candidate"],
+        "is_heuristic": info["is_heuristic"],
+    }
+
+
+def _run_inference(image: Image.Image) -> dict:
+    if _inference_layer == "hosted":
+        result = _infer_hosted(image)
+        if result:
+            return result
+
+    if _yolo_model is not None:
+        result = _infer_local_yolo(image)
+        if result:
+            return result
+
+    return _infer_mock(image)
+
+
 app = FastAPI(
-    title="Zer0wasteX Vision Service v2",
-    version="2.0.0",
-    description="Multi-layer Indian waste classification API targeting 90% real-world accuracy",
+    title="Zer0wasteX Vision Service",
+    version="2.1.0",
+    description="AI-assisted waste classification with hosted/local/mock adapters",
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
+    allow_origins=os.environ.get("VISION_CORS_ORIGINS", "*").split(","),
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -311,11 +301,12 @@ app.add_middleware(
 def health():
     return {
         "status": "ok",
-        "service": "zer0wastex-vision-v2",
+        "service": "zer0wastex-vision",
         "inference_layer": _inference_layer,
+        "model_source_config": MODEL_SOURCE,
         "custom_model_loaded": CUSTOM_WEIGHTS.exists(),
-        "roboflow_active": _roboflow_client is not None,
-        "yolo_active": _yolo_model is not None,
+        "hosted_inference_enabled": _hosted_enabled,
+        "local_model_active": _yolo_model is not None,
     }
 
 
@@ -325,10 +316,11 @@ def get_classes():
         "classes": {
             str(idx): {
                 "name": name,
-                **CLASS_LABELS[name]
+                **CLASS_LABELS[name],
             }
             for idx, name in WASTE_CLASSES.items()
-        }
+        },
+        "mlp_taxonomy": MLP_TAXONOMY,
     }
 
 
@@ -337,12 +329,6 @@ async def score_image(
     file: UploadFile = File(...),
     bin_type: Optional[str] = Query(None, description="wet_bin | dry_bin | hazardous_bin"),
 ):
-    """
-    Score a waste drop image.
-
-    - **file**: JPEG/PNG image of the waste being dropped
-    - **bin_type**: Optional — if provided, checks if waste matches bin type
-    """
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image (JPEG/PNG)")
 
@@ -352,51 +338,54 @@ async def score_image(
 
     try:
         image = Image.open(io.BytesIO(contents)).convert("RGB")
-        # Normalise resolution (prevents very small/large images skewing inference)
         if max(image.size) > 1280:
             image.thumbnail((1280, 1280), Image.LANCZOS)
     except Exception:
         raise HTTPException(status_code=422, detail="Could not decode image")
 
     t0 = time.perf_counter()
-
-    if _inference_layer == "roboflow":
-        result = _infer_roboflow(image)
-        active_layer = "roboflow"
-    else:
-        result = _infer_yolo(image)
-        active_layer = _inference_layer
-
+    result = _run_inference(image)
     inference_ms = round((time.perf_counter() - t0) * 1000, 1)
 
     waste_class = result["waste_class"]
-    confidence  = result["confidence"]
+    confidence = float(result["confidence"])
 
     ai_quality_score = _score_from_waste_class(waste_class, confidence)
+    difficulty = CLASS_DIFFICULTY.get(waste_class, 1.0)
+    ai_quality_score = max(0, min(100, int(ai_quality_score / difficulty)))
 
-    # Check segregation correctness
     is_correctly_sorted = None
     if bin_type:
-        from waste_classes import SEGREGATION_RULES
         allowed = SEGREGATION_RULES.get(bin_type, [])
         is_correctly_sorted = waste_class in allowed
         if not is_correctly_sorted:
-            ai_quality_score = max(0, ai_quality_score - 30)  # penalty for wrong bin
+            ai_quality_score = max(0, ai_quality_score - 30)
+
+    mlp = _resolve_mlp_category(result)
 
     logger.info(
-        "Scored | layer=%s | class=%s | conf=%.2f | score=%d | bin=%s | %.1fms",
-        active_layer, waste_class, confidence, ai_quality_score, bin_type or "N/A", inference_ms,
+        "Scored | source=%s | class=%s | conf=%.2f | score=%d | mlp=%s | %.1fms",
+        result.get("model_source", _inference_layer),
+        waste_class,
+        confidence,
+        ai_quality_score,
+        mlp["category"],
+        inference_ms,
     )
 
-    return JSONResponse({
-        "ai_quality_score":    ai_quality_score,
-        "waste_class":         waste_class,
-        "waste_class_label":   CLASS_LABELS[waste_class],
-        "classes_detected":    result["classes_detected"],
-        "confidence":          confidence,
-        "raw_predictions":     result.get("raw_predictions", []),
-        "inference_layer":     active_layer,
-        "inference_ms":        inference_ms,
-        "is_correctly_sorted": is_correctly_sorted,
-        "bin_type_checked":    bin_type,
-    })
+    return JSONResponse(
+        {
+            "ai_quality_score": ai_quality_score,
+            "waste_class": waste_class,
+            "waste_class_label": CLASS_LABELS[waste_class],
+            "classes_detected": result.get("classes_detected", []),
+            "confidence": confidence,
+            "raw_predictions": result.get("raw_predictions", []),
+            "inference_layer": _inference_layer,
+            "model_source": result.get("model_source", _inference_layer),
+            "inference_ms": inference_ms,
+            "is_correctly_sorted": is_correctly_sorted,
+            "bin_type_checked": bin_type,
+            "mlp_category": mlp,
+        }
+    )

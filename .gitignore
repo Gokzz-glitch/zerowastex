@@ -1,0 +1,25 @@
+# dependencies
+**/node_modules/
+
+# python
+**/.venv/
+**/venv/
+**/__pycache__/
+**/.pytest_cache/
+
+# local env
+**/.env
+
+# build artifacts
+**/dist/
+**/build/
+
+# model and runtime outputs
+ml/weights/
+ml/runs/
+
+# logs and temp
+*.log
+*.sqlite
+*.db
+*.zip
